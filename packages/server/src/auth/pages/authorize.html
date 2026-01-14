@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connect to Kimai - urTime MCP</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+      width: 100%;
+      max-width: 440px;
+      padding: 40px;
+    }
+
+    .logo {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .logo h1 {
+      font-size: 28px;
+      color: #1a1a2e;
+      font-weight: 700;
+    }
+
+    .logo p {
+      color: #666;
+      margin-top: 8px;
+      font-size: 14px;
+    }
+
+    .client-info {
+      background: #f8f9fa;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 24px;
+      border-left: 4px solid #667eea;
+    }
+
+    .client-info p {
+      font-size: 14px;
+      color: #444;
+    }
+
+    .client-info strong {
+      color: #1a1a2e;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      font-weight: 500;
+      margin-bottom: 8px;
+      color: #1a1a2e;
+      font-size: 14px;
+    }
+
+    input[type="text"],
+    input[type="url"],
+    input[type="password"] {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #e1e5eb;
+      border-radius: 8px;
+      font-size: 16px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+
+    input::placeholder {
+      color: #aaa;
+    }
+
+    .help-text {
+      font-size: 12px;
+      color: #666;
+      margin-top: 6px;
+    }
+
+    .help-text a {
+      color: #667eea;
+      text-decoration: none;
+    }
+
+    .help-text a:hover {
+      text-decoration: underline;
+    }
+
+    .checkbox-group {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+
+    .checkbox-group input {
+      margin-top: 3px;
+    }
+
+    .checkbox-group label {
+      font-size: 13px;
+      font-weight: 400;
+      color: #444;
+      margin-bottom: 0;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 12px;
+    }
+
+    button {
+      flex: 1;
+      padding: 14px 24px;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .btn-secondary {
+      background: white;
+      color: #666;
+      border: 2px solid #e1e5eb;
+    }
+
+    .btn-secondary:hover {
+      border-color: #ccc;
+      background: #f8f9fa;
+    }
+
+    .btn-test {
+      background: #e8f5e9;
+      color: #2e7d32;
+      border: none;
+      margin-bottom: 20px;
+      width: 100%;
+    }
+
+    .btn-test:hover {
+      background: #c8e6c9;
+    }
+
+    .status {
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 14px;
+      display: none;
+    }
+
+    .status.success {
+      display: block;
+      background: #e8f5e9;
+      color: #2e7d32;
+      border: 1px solid #a5d6a7;
+    }
+
+    .status.error {
+      display: block;
+      background: #ffebee;
+      color: #c62828;
+      border: 1px solid #ef9a9a;
+    }
+
+    .status.loading {
+      display: block;
+      background: #e3f2fd;
+      color: #1565c0;
+      border: 1px solid #90caf9;
+    }
+
+    .scopes {
+      background: #f8f9fa;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 24px;
+    }
+
+    .scopes h3 {
+      font-size: 14px;
+      color: #1a1a2e;
+      margin-bottom: 12px;
+    }
+
+    .scope-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #444;
+      margin-bottom: 8px;
+    }
+
+    .scope-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .scope-icon {
+      width: 20px;
+      height: 20px;
+      background: #667eea;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">
+      <h1>urTime MCP</h1>
+      <p>Connect your Kimai time tracking</p>
+    </div>
+
+    <div class="client-info">
+      <p>
+        <strong>Claude</strong> is requesting access to your Kimai account.
+      </p>
+    </div>
+
+    <form id="authForm" method="POST" action="/authorize">
+      <!-- Hidden OAuth fields -->
+      <input type="hidden" name="client_id" value="{{CLIENT_ID}}">
+      <input type="hidden" name="redirect_uri" value="{{REDIRECT_URI}}">
+      <input type="hidden" name="state" value="{{STATE}}">
+      <input type="hidden" name="code_challenge" value="{{CODE_CHALLENGE}}">
+      <input type="hidden" name="scope" value="{{SCOPE}}">
+
+      <div id="status" class="status"></div>
+
+      <div class="form-group">
+        <label for="kimai_url">Kimai URL</label>
+        <input
+          type="url"
+          id="kimai_url"
+          name="kimai_url"
+          placeholder="https://your-company.kimai.cloud"
+          required
+        >
+        <p class="help-text">Your Kimai instance URL (e.g., https://demo.kimai.org)</p>
+      </div>
+
+      <div class="form-group">
+        <label for="kimai_token">API Token</label>
+        <input
+          type="password"
+          id="kimai_token"
+          name="kimai_token"
+          placeholder="Enter your Kimai API token"
+          required
+        >
+        <p class="help-text">
+          Get your token from: Kimai > Your Profile > API Access.
+          <a href="https://www.kimai.org/documentation/rest-api.html" target="_blank">Learn more</a>
+        </p>
+      </div>
+
+      <div class="form-group">
+        <label for="kimai_email">Email (optional)</label>
+        <input
+          type="text"
+          id="kimai_email"
+          name="kimai_email"
+          placeholder="your@email.com"
+        >
+        <p class="help-text">Required for Kimai Cloud. Leave empty for self-hosted with Bearer token.</p>
+      </div>
+
+      <button type="button" class="btn-test" onclick="testConnection()">
+        Test Connection
+      </button>
+
+      <div class="scopes">
+        <h3>Permissions requested:</h3>
+        <div class="scope-item">
+          <span class="scope-icon">R</span>
+          <span>Read your projects, activities, and time entries</span>
+        </div>
+        <div class="scope-item">
+          <span class="scope-icon">W</span>
+          <span>Create and modify time entries</span>
+        </div>
+      </div>
+
+      <div class="buttons">
+        <button type="button" class="btn-secondary" onclick="window.close()">Cancel</button>
+        <button type="submit" class="btn-primary" id="authorizeBtn">Authorize</button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const authorizeBtn = document.getElementById('authorizeBtn');
+
+    function showStatus(message, type) {
+      statusEl.textContent = message;
+      statusEl.className = 'status ' + type;
+    }
+
+    function clearStatus() {
+      statusEl.className = 'status';
+      statusEl.textContent = '';
+    }
+
+    async function testConnection() {
+      const kimaiUrl = document.getElementById('kimai_url').value;
+      const kimaiToken = document.getElementById('kimai_token').value;
+      const kimaiEmail = document.getElementById('kimai_email').value;
+
+      if (!kimaiUrl || !kimaiToken) {
+        showStatus('Please enter both Kimai URL and API token.', 'error');
+        return;
+      }
+
+      showStatus('Testing connection...', 'loading');
+      authorizeBtn.disabled = true;
+
+      try {
+        const response = await fetch('/test-connection', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            kimai_url: kimaiUrl,
+            kimai_token: kimaiToken,
+            kimai_email: kimaiEmail || undefined
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          showStatus('Connection successful! You can now authorize.', 'success');
+          authorizeBtn.disabled = false;
+        } else {
+          showStatus('Connection failed: ' + (data.error || 'Unknown error'), 'error');
+          authorizeBtn.disabled = false;
+        }
+      } catch (error) {
+        showStatus('Connection test failed: ' + error.message, 'error');
+        authorizeBtn.disabled = false;
+      }
+    }
+
+    // Form submission validation
+    document.getElementById('authForm').addEventListener('submit', function(e) {
+      const kimaiUrl = document.getElementById('kimai_url').value;
+      const kimaiToken = document.getElementById('kimai_token').value;
+
+      if (!kimaiUrl || !kimaiToken) {
+        e.preventDefault();
+        showStatus('Please fill in all required fields.', 'error');
+        return;
+      }
+
+      authorizeBtn.disabled = true;
+      authorizeBtn.textContent = 'Authorizing...';
+    });
+  </script>
+</body>
+</html>

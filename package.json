@@ -1,0 +1,14 @@
+{
+  "name": "urtime-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "start": "cd packages/server && npm start",
+    "start:http": "cd packages/server && npm run start:http",
+    "dev": "cd packages/server && npm run dev",
+    "clean": "pnpm -r clean"
+  },
+  "packageManager": "pnpm@9.0.0"
+}
