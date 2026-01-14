@@ -2,161 +2,253 @@
 
 Deploy the urTime MCP Server to a production server.
 
+---
+
+## Quick Glossary
+
+| Term | What it is |
+|------|------------|
+| **SSL/HTTPS** | Encryption for web traffic. The padlock in your browser. Required so passwords aren't sent in plain text. |
+| **Caddy** | A web server that automatically gets SSL certificates for free. Much simpler than Nginx. |
+| **PM2** | Keeps your server running 24/7 and restarts it if it crashes. |
+| **Reverse Proxy** | Caddy sits in front of your app, handles HTTPS, and forwards requests to your app. |
+
+---
+
 ## Prerequisites
 
-- Node.js 18+
-- Domain with SSL certificate (HTTPS required)
-- Nginx (recommended) or another reverse proxy
+- Ubuntu/Debian server (e.g., Stinger)
+- Domain pointing to your server's IP (e.g., `mcp.yourdomain.com`)
+- Ports 80 and 443 open on firewall
 
-## Quick Deploy
+---
+
+## Step 1: Install Node.js & pnpm
 
 ```bash
-# 1. Clone the repository
-git clone <your-repo> && cd urtime-try-ref-to-mcp
+# Install Node.js 20
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
 
-# 2. Install dependencies
-npm install
+# Verify
+node --version  # Should show v20.x.x
 
-# 3. Build
-npm run build
+# Install pnpm
+npm install -g pnpm
+```
 
-# 4. Configure
-cd packages/mcp-server
+---
+
+## Step 2: Clone and Build
+
+```bash
+# Clone your repo (replace with your GitHub URL)
+git clone https://github.com/YOUR_USERNAME/urtime-mcp.git
+cd urtime-mcp
+
+# Install dependencies
+pnpm install
+
+# Build
+pnpm build
+```
+
+---
+
+## Step 3: Configure Environment
+
+```bash
+cd packages/server
+
+# Copy example config
 cp .env.example .env
 
-# 5. Edit .env with your values
+# Generate a secure encryption key
+openssl rand -hex 32
+# This outputs something like: a1b2c3d4e5f6...
+# Copy this value
+
+# Edit the config
 nano .env
 ```
 
-## Configuration
-
-Edit `.env` with these required values:
-
+**Set these values in .env:**
 ```bash
-# Your HTTPS domain
-HTTP_BASE_URL=https://mcp.yourdomain.com
-
-# Generate encryption key
-openssl rand -hex 32
-# Then add to .env:
-ENCRYPTION_KEY=<your-generated-key>
+MCP_MODE=http
+HTTP_BASE_URL=https://mcp.yourdomain.com   # <-- Your actual domain
+ENCRYPTION_KEY=paste_the_key_you_generated  # <-- From openssl command
 ```
 
-## Nginx Configuration
+Save and exit (Ctrl+X, Y, Enter).
 
-Create `/etc/nginx/sites-available/mcp`:
+---
 
-```nginx
-server {
-    listen 80;
-    server_name mcp.yourdomain.com;
-    return 301 https://$server_name$request_uri;
-}
+## Step 4: Install Caddy
 
-server {
-    listen 443 ssl http2;
-    server_name mcp.yourdomain.com;
+Caddy is a web server that **automatically** gets and renews SSL certificates.
 
-    ssl_certificate /etc/letsencrypt/live/mcp.yourdomain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/mcp.yourdomain.com/privkey.pem;
+```bash
+# Install dependencies
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
 
-    location / {
-        proxy_pass http://127.0.0.1:3002;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
+# Add Caddy repository
+curl -1sLf 'https://dl.cloudflare.com/cloudflare-stable.deb.sh' | sudo bash
 
-        # SSE support
-        proxy_buffering off;
-        proxy_read_timeout 86400;
-    }
+# Install Caddy
+sudo apt install caddy
+```
+
+**Alternative install method (if above fails):**
+```bash
+sudo apt install -y caddy
+# Or download from: https://caddyserver.com/docs/install
+```
+
+---
+
+## Step 5: Configure Caddy
+
+```bash
+sudo nano /etc/caddy/Caddyfile
+```
+
+**Delete everything and paste this (replace with your domain):**
+```
+mcp.yourdomain.com {
+    reverse_proxy localhost:3002
 }
 ```
 
-Enable the site:
+Save and exit (Ctrl+X, Y, Enter).
 
+**Start Caddy:**
 ```bash
-sudo ln -s /etc/nginx/sites-available/mcp /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
+sudo systemctl enable caddy
+sudo systemctl restart caddy
 ```
 
-## SSL Certificate (Let's Encrypt)
+Caddy will now:
+- Automatically get an SSL certificate from Let's Encrypt
+- Automatically renew it before it expires
+- Redirect HTTP to HTTPS
+- Forward requests to your MCP server on port 3002
+
+---
+
+## Step 6: Install PM2
+
+PM2 keeps your server running and auto-restarts if it crashes.
 
 ```bash
-sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d mcp.yourdomain.com
-```
-
-## Process Manager (PM2)
-
-Install and configure PM2:
-
-```bash
-# Install PM2
+# Install PM2 globally
 npm install -g pm2
 
-# Start the server
-cd packages/mcp-server
+# Go to your server folder
+cd ~/urtime-mcp/packages/server
+
+# Start the MCP server
 pm2 start npm --name "urtime-mcp" -- start
 
-# Auto-start on reboot
+# Make it start automatically on reboot
 pm2 startup
+# Run the command it outputs, then:
 pm2 save
 ```
 
-PM2 commands:
-
+**Useful PM2 commands:**
 ```bash
-pm2 status          # Check status
-pm2 logs urtime-mcp # View logs
-pm2 restart urtime-mcp # Restart
-pm2 stop urtime-mcp    # Stop
+pm2 status           # Is it running?
+pm2 logs urtime-mcp  # View logs
+pm2 restart urtime-mcp  # Restart server
+pm2 stop urtime-mcp     # Stop server
 ```
 
-## Verify Deployment
+---
+
+## Step 7: Open Firewall Ports
 
 ```bash
-# Health check
+# Allow HTTP and HTTPS
+sudo ufw allow 80
+sudo ufw allow 443
+
+# Check status
+sudo ufw status
+```
+
+---
+
+## Step 8: Verify It Works
+
+```bash
+# Test health endpoint
 curl https://mcp.yourdomain.com/health
-
-# Should return:
-# {"status":"ok","server":"urtime-kimai","version":"1.0.0","mode":"http","sessions":0}
-
-# OAuth metadata
-curl https://mcp.yourdomain.com/.well-known/oauth-authorization-server
 ```
 
-## Connect from Claude/ChatGPT
+**Expected response:**
+```json
+{"status":"ok","server":"urtime-kimai","version":"1.0.0","mode":"http"}
+```
 
-1. Go to MCP settings in Claude or ChatGPT
-2. Add new connector with URL: `https://mcp.yourdomain.com`
-3. Follow OAuth flow to enter your Kimai credentials
-4. Start using Kimai tools
+You can also open `https://mcp.yourdomain.com/health` in your browser.
+
+---
+
+## Step 9: Connect from Claude/ChatGPT
+
+1. Open Claude or ChatGPT
+2. Go to MCP/Connector settings
+3. Add new server: `https://mcp.yourdomain.com`
+4. You'll be redirected to the login page
+5. Enter your Kimai URL and API token
+6. Click Authorize
+7. Done! Now ask Claude to manage your timesheets.
+
+---
 
 ## Troubleshooting
 
-**502 Bad Gateway**
-- Check if server is running: `pm2 status`
-- Check logs: `pm2 logs urtime-mcp`
+### "This site can't be reached"
+- Check domain DNS points to your server IP
+- Check firewall: `sudo ufw status` (ports 80/443 should be open)
 
-**OAuth redirect issues**
-- Ensure `HTTP_BASE_URL` matches your domain exactly
-- Ensure HTTPS is working
+### "502 Bad Gateway"
+- MCP server isn't running
+- Check: `pm2 status`
+- View logs: `pm2 logs urtime-mcp`
 
-**Connection refused**
-- Check firewall: `sudo ufw status`
-- Allow port 443: `sudo ufw allow 443`
+### "Certificate error"
+- Caddy couldn't get SSL certificate
+- Check Caddy logs: `sudo journalctl -u caddy`
+- Make sure domain DNS is correct
+
+### "OAuth redirect not working"
+- Check `HTTP_BASE_URL` in `.env` matches your domain exactly
+- Restart after changes: `pm2 restart urtime-mcp`
+
+---
 
 ## Security Checklist
 
-- [ ] HTTPS enabled with valid certificate
-- [ ] `ENCRYPTION_KEY` is set to a secure random value
-- [ ] `CORS_ALLOWED_ORIGINS` is restricted (not `*`)
-- [ ] Firewall configured (only 80/443 open)
-- [ ] Regular backups of `data/auth.db`
+- [ ] HTTPS working (padlock in browser)
+- [ ] `ENCRYPTION_KEY` is set (random 64-character hex)
+- [ ] `.env` file is NOT committed to git
+- [ ] Only ports 22, 80, 443 open on firewall
+- [ ] Backup `data/auth.db` regularly (contains user credentials)
+
+---
+
+## Summary
+
+| Step | Command |
+|------|---------|
+| Install Node | `curl -fsSL https://deb.nodesource.com/setup_20.x \| sudo -E bash - && sudo apt install -y nodejs` |
+| Install pnpm | `npm install -g pnpm` |
+| Clone & build | `git clone ... && pnpm install && pnpm build` |
+| Configure | `cp .env.example .env && nano .env` |
+| Install Caddy | `sudo apt install caddy` |
+| Configure Caddy | `sudo nano /etc/caddy/Caddyfile` |
+| Start Caddy | `sudo systemctl enable caddy && sudo systemctl restart caddy` |
+| Install PM2 | `npm install -g pm2` |
+| Start server | `pm2 start npm --name "urtime-mcp" -- start` |
+| Auto-start | `pm2 startup && pm2 save` |
