@@ -11,6 +11,33 @@ This guide will walk you through deploying the urTime MCP Server on a Hostinger 
 
 ---
 
+## ⚠️ Important: Where to Install
+
+**Install OUTSIDE of `public_html/`** - NOT inside!
+
+Your Hostinger directory structure looks like this:
+```
+~/
+├── DO_NOT_UPLOAD_HERE
+└── public_html/          ← DON'T install here (for static/PHP websites)
+```
+
+**Install here instead:**
+```bash
+cd ~                    # Go to your home directory
+mkdir -p apps           # Create apps folder (optional)
+cd apps
+git clone ...           # Clone your repo here
+```
+
+**Why?**
+- `public_html/` is for static files directly accessible via HTTP
+- Node.js apps run as background services on ports (3002)
+- Caddy reverse proxy forwards `https://yourdomain.com` → `localhost:3002`
+- Your app files stay secure and aren't web-accessible directly
+
+---
+
 ## Overview: What This Code Does
 
 The **urTime MCP Server** is a Node.js/TypeScript application that:
@@ -78,9 +105,18 @@ pnpm --version
 
 ## Step 4: Clone Your Repository
 
+**IMPORTANT: Install OUTSIDE of `public_html`**
+
+- ❌ **DON'T install in `public_html/`** - That's for static web files (PHP, HTML, etc.)
+- ✅ **DO install OUTSIDE `public_html/`** - Node.js apps should run as background services
+
 ```bash
-# Navigate to a suitable directory (e.g., /var/www or /home)
-cd /var/www  # or cd ~/apps
+# Navigate to your home directory (outside public_html)
+cd ~  # or cd /home/your-username
+
+# Create an apps directory (optional, for organization)
+mkdir -p apps
+cd apps
 
 # Clone your repository
 # Replace with your actual Git repository URL
@@ -89,8 +125,14 @@ cd urtime-mcp
 
 # If you don't have a Git repository yet, you can:
 # 1. Create one on GitHub/GitLab
-# 2. Or upload files via FTP/SCP
+# 2. Or upload files via FTP/SCP to ~/apps/urtime-mcp (NOT to public_html)
 ```
+
+**Why outside `public_html`?**
+- `public_html/` is for files directly accessible via HTTP (static sites, PHP apps)
+- Node.js apps run as background processes on specific ports (like 3002)
+- A reverse proxy (Caddy) forwards requests from `https://yourdomain.com` → `localhost:3002`
+- Your app files don't need to be web-accessible directly
 
 ---
 
