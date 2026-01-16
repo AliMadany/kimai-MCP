@@ -20,7 +20,7 @@ import { createOAuthMetadataRouter } from '../auth/oauth-metadata.js';
 import { createOAuthRouter } from '../auth/oauth.js';
 import { authMiddleware, AuthenticatedRequest } from '../auth/middleware.js';
 import { HttpSseTransport, SessionManager } from './sse-transport.js';
-import { getDatabase, closeDatabase } from '../auth/database.js';
+import { initDatabase, closeDatabase } from '../auth/database.js';
 import { mkdirSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -48,7 +48,7 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
 
   // Initialize database
   const dbPath = path.resolve(__dirname, '../../', config.database.path);
-  getDatabase(dbPath);
+  await initDatabase(dbPath);
 
   // Security middleware
   app.use(helmet({
