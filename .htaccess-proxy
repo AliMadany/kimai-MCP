@@ -1,0 +1,19 @@
+# Apache .htaccess for proxying to Node.js
+# Place this in public_html/.htaccess
+# 
+# Note: Requires mod_rewrite and mod_proxy to be enabled
+# If this doesn't work, use the PHP proxy instead
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    
+    # Proxy all requests to Node.js server on port 3002
+    RewriteRule ^(.*)$ http://127.0.0.1:3002/$1 [P,L]
+</IfModule>
+
+<IfModule mod_proxy.c>
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:3002/
+    ProxyPassReverse / http://127.0.0.1:3002/
+</IfModule>
+
