@@ -17,15 +17,25 @@ import { registerTools, handleToolCall } from '../tools/index.js';
 import { registerResources, handleResourceRead } from '../resources/index.js';
 import { registerPrompts, handlePromptGet } from '../prompts/index.js';
 import { createOAuthMetadataRouter } from '../auth/oauth-metadata.js';
-import { createOAuthRouter } from '../auth/oauth.js';
-import { authMiddleware, AuthenticatedRequest } from '../auth/middleware.js';
+import { createOAuthRouter, getUserKimaiCredentials } from '../auth/oauth.js';
 import { HttpSseTransport, SessionManager } from './sse-transport.js';
-import { getDatabase, closeDatabase } from '../auth/database.js';
+import { getDatabase, closeDatabase } from '../auth/database-json.js';
 import { mkdirSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Store session auth info
+interface SessionAuth {
+  userId: string;
+  scopes: string[];
+  kimaiUrl: string;
+  kimaiToken: string;
+  kimaiEmail?: string;
+}
+
+const sessionAuthMap = new Map<string, SessionAuth>();
 
 /**
  * Create and start the HTTP server for remote MCP access
@@ -50,17 +60,11 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
   const dbPath = path.resolve(__dirname, '../../', config.database.path);
   getDatabase(dbPath);
 
-  // Security middleware
+  // Security middleware - relaxed for MCP cross-origin access
   app.use(helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        scriptSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:"],
-        connectSrc: ["'self'"]
-      }
-    }
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginOpenerPolicy: false
   }));
 
   // Rate limiting
@@ -87,7 +91,8 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
       }
     }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-MCP-Session-Id');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Session-Id');
+    res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
 
     if (req.method === 'OPTIONS') {
       res.status(204).end();
@@ -121,18 +126,67 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
   // OAuth endpoints (no auth required)
   app.use(createOAuthRouter(config.http.baseUrl));
 
-  // MCP SSE connection (requires auth)
-  app.get('/mcp', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
-    if (!req.auth) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
+  /**
+   * Helper to extract and validate Bearer token
+   */
+  function extractAuth(req: Request): SessionAuth | null {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return null;
+
+    const parts = authHeader.split(' ');
+    if (parts.length !== 2 || parts[0].toLowerCase() !== 'bearer') return null;
+
+    const accessToken = parts[1];
+    const db = getDatabase();
+    const tokenRecord = db.getOAuthToken(accessToken);
+
+    if (!tokenRecord || tokenRecord.expires_at < Date.now()) {
+      if (tokenRecord) db.deleteOAuthToken(accessToken);
+      return null;
     }
+
+    const kimaiCreds = getUserKimaiCredentials(tokenRecord.user_id);
+    if (!kimaiCreds) return null;
+
+    return {
+      userId: tokenRecord.user_id,
+      scopes: tokenRecord.scopes.split(' '),
+      kimaiUrl: kimaiCreds.kimaiUrl,
+      kimaiToken: kimaiCreds.kimaiToken,
+      kimaiEmail: kimaiCreds.kimaiEmail
+    };
+  }
+
+  /**
+   * Send 401 response with OAuth discovery info
+   */
+  function sendAuthRequired(res: Response): void {
+    const baseUrl = config.http!.baseUrl;
+    res.setHeader(
+      'WWW-Authenticate',
+      `Bearer realm="${baseUrl}", resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`
+    );
+    res.status(401).json({
+      error: 'unauthorized',
+      error_description: 'Bearer token required for this operation'
+    });
+  }
+
+  // MCP SSE connection (GET) - NO AUTH REQUIRED for initial connection
+  const mcpGetHandler = async (req: Request, res: Response) => {
+    // Try to extract auth if provided (optional at this stage)
+    const auth = extractAuth(req);
 
     // Create a new MCP session
     const transport = sessionManager.createSession();
     const sessionId = transport.getSessionId();
 
-    console.log(`[HTTP] New MCP session: ${sessionId} for user ${req.auth.userId}`);
+    console.log(`[HTTP] New MCP session: ${sessionId}${auth ? ` for user ${auth.userId}` : ' (unauthenticated)'}`);
+
+    // If auth provided, store it for this session
+    if (auth) {
+      sessionAuthMap.set(sessionId, auth);
+    }
 
     // Create MCP server for this session
     const server = new Server(
@@ -149,27 +203,28 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
       }
     );
 
-    // Create Kimai client factory using the user's credentials
-    const createKimaiClient = () => {
-      return new KimaiClient({
-        baseUrl: req.auth!.kimaiUrl,
-        token: req.auth!.kimaiToken,
-        email: req.auth!.kimaiEmail
-      });
-    };
-
-    // Context for handlers
-    const context = {
-      config,
-      createKimaiClient
-    };
-
     // Register handlers
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       return { tools: registerTools() };
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      // Tool calls REQUIRE authentication
+      const sessionAuth = sessionAuthMap.get(sessionId);
+      if (!sessionAuth) {
+        // Return error that triggers OAuth flow
+        throw new Error('Authentication required. Please authorize with your Kimai credentials.');
+      }
+
+      const createKimaiClient = () => {
+        return new KimaiClient({
+          baseUrl: sessionAuth.kimaiUrl,
+          token: sessionAuth.kimaiToken,
+          email: sessionAuth.kimaiEmail
+        });
+      };
+
+      const context = { config, createKimaiClient };
       return handleToolCall(request.params.name, request.params.arguments || {}, context);
     });
 
@@ -178,6 +233,20 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
     });
 
     server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      const sessionAuth = sessionAuthMap.get(sessionId);
+      if (!sessionAuth) {
+        throw new Error('Authentication required. Please authorize with your Kimai credentials.');
+      }
+
+      const createKimaiClient = () => {
+        return new KimaiClient({
+          baseUrl: sessionAuth.kimaiUrl,
+          token: sessionAuth.kimaiToken,
+          email: sessionAuth.kimaiEmail
+        });
+      };
+
+      const context = { config, createKimaiClient };
       return handleResourceRead(request.params.uri, context);
     });
 
@@ -186,11 +255,28 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
     });
 
     server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+      const sessionAuth = sessionAuthMap.get(sessionId);
+      if (!sessionAuth) {
+        throw new Error('Authentication required. Please authorize with your Kimai credentials.');
+      }
+
+      const createKimaiClient = () => {
+        return new KimaiClient({
+          baseUrl: sessionAuth.kimaiUrl,
+          token: sessionAuth.kimaiToken,
+          email: sessionAuth.kimaiEmail
+        });
+      };
+
+      const context = { config, createKimaiClient };
       return handlePromptGet(request.params.name, request.params.arguments || {}, context);
     });
 
     // Connect server to transport
     await server.connect(transport);
+
+    // Return session ID in header
+    res.setHeader('Mcp-Session-Id', sessionId);
 
     // Handle SSE connection
     transport.handleSseConnection(req, res);
@@ -198,16 +284,20 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
     // Clean up on disconnect
     transport.onclose = () => {
       console.log(`[HTTP] MCP session closed: ${sessionId}`);
+      sessionAuthMap.delete(sessionId);
     };
-  });
+  };
 
-  // MCP message endpoint (POST)
-  app.post('/mcp', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
-    const sessionId = req.headers['x-mcp-session-id'] as string;
+  app.get('/mcp', mcpGetHandler);
+  app.get('/', mcpGetHandler);
+
+  // MCP message endpoint (POST) - Auth checked per-message
+  const mcpPostHandler = async (req: Request, res: Response) => {
+    const sessionId = req.headers['mcp-session-id'] as string;
 
     if (!sessionId) {
       res.status(400).json({
-        error: 'Missing X-MCP-Session-Id header'
+        error: 'Missing Mcp-Session-Id header'
       });
       return;
     }
@@ -221,6 +311,13 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
       return;
     }
 
+    // Check for auth token and update session auth if provided
+    const auth = extractAuth(req);
+    if (auth) {
+      sessionAuthMap.set(sessionId, auth);
+      console.log(`[HTTP] Session ${sessionId} authenticated for user ${auth.userId}`);
+    }
+
     try {
       const message = req.body as JSONRPCMessage;
       await transport.handleMessage(message);
@@ -231,7 +328,10 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
         error: 'Failed to process message'
       });
     }
-  });
+  };
+
+  app.post('/mcp', mcpPostHandler);
+  app.post('/', mcpPostHandler);
 
   // Documentation page
   app.get('/docs', (_req: Request, res: Response) => {
@@ -278,12 +378,12 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
 
         <div class="endpoint">
           <span class="method">GET</span> <code>/mcp</code>
-          <p>MCP SSE connection (requires Bearer token)</p>
+          <p>MCP SSE connection (auth optional for connection, required for tools)</p>
         </div>
 
         <div class="endpoint">
           <span class="method">POST</span> <code>/mcp</code>
-          <p>Send MCP messages (requires Bearer token)</p>
+          <p>Send MCP messages (include Bearer token for authenticated operations)</p>
         </div>
 
         <h2>Usage</h2>

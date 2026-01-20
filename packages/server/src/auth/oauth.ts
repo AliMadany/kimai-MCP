@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { KimaiClient } from '@urtime/shared';
-import { getDatabase } from './database.js';
+import { getDatabase } from './database-json.js';
 import { encrypt, decrypt, generateSecureToken, verifyPKCE } from './crypto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

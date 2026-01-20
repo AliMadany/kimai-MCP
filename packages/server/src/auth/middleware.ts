@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { getDatabase } from './database.js';
+import { getDatabase } from './database-json.js';
 import { getUserKimaiCredentials } from './oauth.js';
 
 /**
@@ -28,10 +28,10 @@ export function authMiddleware(
 
   // No auth header - return 401 with OAuth metadata URL
   if (!authHeader) {
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const baseUrl = process.env.HTTP_BASE_URL || `${req.protocol}://${req.get('host')}`;
     res.setHeader(
       'WWW-Authenticate',
-      `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`
+      `Bearer realm="${baseUrl}", resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`
     );
     res.status(401).json({
       error: 'unauthorized',
@@ -114,7 +114,7 @@ export function requireScopes(...requiredScopes: string[]) {
     const missingScopes = requiredScopes.filter(s => !req.auth!.scopes.includes(s));
 
     if (missingScopes.length > 0) {
-      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      const baseUrl = process.env.HTTP_BASE_URL || `${req.protocol}://${req.get('host')}`;
       res.setHeader(
         'WWW-Authenticate',
         `Bearer error="insufficient_scope", ` +
