@@ -29,6 +29,7 @@ export function createOAuthMetadataRouter(baseUrl: string): Router {
       issuer: baseUrl,
       authorization_endpoint: `${baseUrl}/authorize`,
       token_endpoint: `${baseUrl}/token`,
+      registration_endpoint: `${baseUrl}/register`,
       scopes_supported: ['kimai:read', 'kimai:write'],
       response_types_supported: ['code'],
       response_modes_supported: ['query'],
