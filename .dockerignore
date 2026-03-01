@@ -1,0 +1,52 @@
+# Dependencies
+node_modules
+**/node_modules
+
+# Build outputs (we rebuild in Docker)
+**/dist
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files (secrets - set via Docker env vars)
+.env
+**/.env
+.env.*
+**/.env.*
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Test files
+**/*.test.ts
+**/*.spec.ts
+__tests__
+coverage
+
+# Documentation (not needed in image)
+*.md
+!packages/server/src/auth/pages/*.html
+
+# Local data
+**/data
+**/*.db
+
+# Claude config
+.claude
+
+# Blueprints (not needed in image)
+blueprint.md
+OpenAI Blueprint.md

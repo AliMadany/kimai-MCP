@@ -1,15 +1,16 @@
 import express, { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { randomUUID } from 'crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
   ListPromptsRequestSchema,
-  GetPromptRequestSchema,
-  JSONRPCMessage
+  GetPromptRequestSchema
 } from '@modelcontextprotocol/sdk/types.js';
 import { KimaiClient } from '@urtime/shared';
 import type { ServerConfig } from '../config.js';
@@ -17,15 +18,26 @@ import { registerTools, handleToolCall } from '../tools/index.js';
 import { registerResources, handleResourceRead } from '../resources/index.js';
 import { registerPrompts, handlePromptGet } from '../prompts/index.js';
 import { createOAuthMetadataRouter } from '../auth/oauth-metadata.js';
-import { createOAuthRouter } from '../auth/oauth.js';
-import { authMiddleware, AuthenticatedRequest } from '../auth/middleware.js';
-import { HttpSseTransport, SessionManager } from './sse-transport.js';
-import { initDatabase, closeDatabase } from '../auth/database.js';
+import { createOAuthRouter, getUserKimaiCredentials } from '../auth/oauth.js';
+import { getDatabase, closeDatabase } from '../auth/database-json.js';
 import { mkdirSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Store session auth info
+interface SessionAuth {
+  userId: string;
+  scopes: string[];
+  kimaiUrl: string;
+  kimaiToken: string;
+  kimaiEmail?: string;
+}
+
+// Map to store transports and auth per session
+const transports = new Map<string, StreamableHTTPServerTransport>();
+const sessionAuthMap = new Map<string, SessionAuth>();
 
 /**
  * Create and start the HTTP server for remote MCP access
@@ -36,7 +48,6 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
   }
 
   const app = express();
-  const sessionManager = new SessionManager();
 
   // Ensure data directory exists
   const dataDir = path.resolve(__dirname, '../../', config.database.path, '..');
@@ -48,19 +59,13 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
 
   // Initialize database
   const dbPath = path.resolve(__dirname, '../../', config.database.path);
-  await initDatabase(dbPath);
+  getDatabase(dbPath);
 
-  // Security middleware
+  // Security middleware - relaxed for MCP cross-origin access
   app.use(helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        scriptSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:"],
-        connectSrc: ["'self'"]
-      }
-    }
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginOpenerPolicy: false
   }));
 
   // Rate limiting
@@ -71,7 +76,7 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
   });
   app.use(limiter);
 
-  // Body parsing
+  // Body parsing - needed before MCP handler
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
@@ -86,8 +91,9 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
         res.setHeader('Access-Control-Allow-Origin', origin);
       }
     }
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-MCP-Session-Id');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Session-Id, Accept');
+    res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
 
     if (req.method === 'OPTIONS') {
       res.status(204).end();
@@ -111,7 +117,7 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
       server: config.server.name,
       version: config.server.version,
       mode: 'http',
-      sessions: sessionManager.getSessionIds().length
+      sessions: transports.size
     });
   });
 
@@ -121,20 +127,41 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
   // OAuth endpoints (no auth required)
   app.use(createOAuthRouter(config.http.baseUrl));
 
-  // MCP SSE connection (requires auth)
-  app.get('/mcp', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
-    if (!req.auth) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
+  /**
+   * Helper to extract and validate Bearer token
+   */
+  function extractAuth(req: Request): SessionAuth | null {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return null;
+
+    const parts = authHeader.split(' ');
+    if (parts.length !== 2 || parts[0].toLowerCase() !== 'bearer') return null;
+
+    const accessToken = parts[1];
+    const db = getDatabase();
+    const tokenRecord = db.getOAuthToken(accessToken);
+
+    if (!tokenRecord || tokenRecord.expires_at < Date.now()) {
+      if (tokenRecord) db.deleteOAuthToken(accessToken);
+      return null;
     }
 
-    // Create a new MCP session
-    const transport = sessionManager.createSession();
-    const sessionId = transport.getSessionId();
+    const kimaiCreds = getUserKimaiCredentials(tokenRecord.user_id);
+    if (!kimaiCreds) return null;
 
-    console.log(`[HTTP] New MCP session: ${sessionId} for user ${req.auth.userId}`);
+    return {
+      userId: tokenRecord.user_id,
+      scopes: tokenRecord.scopes.split(' '),
+      kimaiUrl: kimaiCreds.kimaiUrl,
+      kimaiToken: kimaiCreds.kimaiToken,
+      kimaiEmail: kimaiCreds.kimaiEmail
+    };
+  }
 
-    // Create MCP server for this session
+  /**
+   * Create MCP server with handlers
+   */
+  function createMcpServer(getSessionAuth: () => SessionAuth | undefined) {
     const server = new Server(
       {
         name: config.server.name,
@@ -149,27 +176,26 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
       }
     );
 
-    // Create Kimai client factory using the user's credentials
-    const createKimaiClient = () => {
-      return new KimaiClient({
-        baseUrl: req.auth!.kimaiUrl,
-        token: req.auth!.kimaiToken,
-        email: req.auth!.kimaiEmail
-      });
-    };
-
-    // Context for handlers
-    const context = {
-      config,
-      createKimaiClient
-    };
-
     // Register handlers
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       return { tools: registerTools() };
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const sessionAuth = getSessionAuth();
+      if (!sessionAuth) {
+        throw new Error('Authentication required. Please authorize with your Kimai credentials.');
+      }
+
+      const createKimaiClient = () => {
+        return new KimaiClient({
+          baseUrl: sessionAuth.kimaiUrl,
+          token: sessionAuth.kimaiToken,
+          email: sessionAuth.kimaiEmail
+        });
+      };
+
+      const context = { config, createKimaiClient };
       return handleToolCall(request.params.name, request.params.arguments || {}, context);
     });
 
@@ -178,6 +204,20 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
     });
 
     server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      const sessionAuth = getSessionAuth();
+      if (!sessionAuth) {
+        throw new Error('Authentication required. Please authorize with your Kimai credentials.');
+      }
+
+      const createKimaiClient = () => {
+        return new KimaiClient({
+          baseUrl: sessionAuth.kimaiUrl,
+          token: sessionAuth.kimaiToken,
+          email: sessionAuth.kimaiEmail
+        });
+      };
+
+      const context = { config, createKimaiClient };
       return handleResourceRead(request.params.uri, context);
     });
 
@@ -186,51 +226,155 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
     });
 
     server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+      const sessionAuth = getSessionAuth();
+      if (!sessionAuth) {
+        throw new Error('Authentication required. Please authorize with your Kimai credentials.');
+      }
+
+      const createKimaiClient = () => {
+        return new KimaiClient({
+          baseUrl: sessionAuth.kimaiUrl,
+          token: sessionAuth.kimaiToken,
+          email: sessionAuth.kimaiEmail
+        });
+      };
+
+      const context = { config, createKimaiClient };
       return handlePromptGet(request.params.name, request.params.arguments || {}, context);
     });
 
-    // Connect server to transport
-    await server.connect(transport);
+    return server;
+  }
 
-    // Handle SSE connection
-    transport.handleSseConnection(req, res);
+  /**
+   * MCP endpoint handler - handles both GET and POST
+   * Returns 401 with WWW-Authenticate header to trigger OAuth flow
+   */
+  const mcpHandler = async (req: Request, res: Response) => {
+    // Extract session ID from header
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
-    // Clean up on disconnect
-    transport.onclose = () => {
-      console.log(`[HTTP] MCP session closed: ${sessionId}`);
+    // Extract auth if provided
+    const auth = extractAuth(req);
+
+    // Helper to return 401 with OAuth challenge (MCP spec format)
+    const return401 = () => {
+      res.setHeader('WWW-Authenticate', `Bearer realm="mcp", resource_metadata="${config.http!.baseUrl}/.well-known/oauth-protected-resource"`);
+      res.status(401).json({
+        error: 'unauthorized',
+        error_description: 'Authentication required. Please complete OAuth authorization.'
+      });
     };
-  });
 
-  // MCP message endpoint (POST)
-  app.post('/mcp', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
-    const sessionId = req.headers['x-mcp-session-id'] as string;
+    // Handle DELETE for session termination
+    if (req.method === 'DELETE') {
+      if (sessionId && transports.has(sessionId)) {
+        const transport = transports.get(sessionId)!;
+        await transport.close();
+        transports.delete(sessionId);
+        sessionAuthMap.delete(sessionId);
+        res.status(200).json({ status: 'session terminated' });
+      } else {
+        res.status(404).json({ error: 'Session not found' });
+      }
+      return;
+    }
 
-    if (!sessionId) {
+    // For existing sessions
+    if (sessionId && transports.has(sessionId)) {
+      const transport = transports.get(sessionId)!;
+
+      // Require auth for existing sessions (except for tools/list which is needed for discovery)
+      const isListRequest = req.body?.method === 'tools/list' ||
+                           req.body?.method === 'resources/list' ||
+                           req.body?.method === 'prompts/list';
+
+      if (!auth && !sessionAuthMap.has(sessionId) && !isListRequest) {
+        console.log(`[HTTP] Session ${sessionId} requires authentication for ${req.body?.method}`);
+        return401();
+        return;
+      }
+
+      // Update auth if provided
+      if (auth) {
+        sessionAuthMap.set(sessionId, auth);
+        console.log(`[HTTP] Session ${sessionId} authenticated for user ${auth.userId}`);
+      }
+
+      // Handle the request with the existing transport
+      await transport.handleRequest(req, res, req.body);
+      return;
+    }
+
+    // For new sessions (initialization) - only on POST with initialize request
+    if (req.method === 'POST' && req.body?.method === 'initialize') {
+      // Allow initialize without auth - Claude discovers OAuth via /.well-known/oauth-authorization-server
+      // Auth will be required for tool calls
+      const newSessionId = randomUUID();
+
+      console.log(`[HTTP] New MCP session: ${newSessionId}${auth ? ` for user ${auth.userId}` : ' (unauthenticated)'}`);
+
+      // Store auth if provided
+      if (auth) {
+        sessionAuthMap.set(newSessionId, auth);
+      }
+
+      // Create transport with session ID generator
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => newSessionId
+      });
+
+      // Create MCP server for this session
+      const getSessionAuth = () => sessionAuthMap.get(newSessionId);
+      const server = createMcpServer(getSessionAuth);
+
+      // Connect server to transport
+      await server.connect(transport);
+
+      // Store transport
+      transports.set(newSessionId, transport);
+
+      // Handle cleanup on close
+      transport.onclose = () => {
+        console.log(`[HTTP] MCP session closed: ${newSessionId}`);
+        transports.delete(newSessionId);
+        sessionAuthMap.delete(newSessionId);
+      };
+
+      // Handle the initialize request
+      await transport.handleRequest(req, res, req.body);
+      return;
+    }
+
+    // If no session and not initialize, return error
+    if (req.method === 'POST') {
       res.status(400).json({
-        error: 'Missing X-MCP-Session-Id header'
+        jsonrpc: '2.0',
+        error: {
+          code: -32600,
+          message: 'Invalid Request: Session not found. Send initialize request first.'
+        },
+        id: req.body?.id || null
       });
       return;
     }
 
-    const transport = sessionManager.getSession(sessionId);
+    // GET without session - return 400
+    res.status(400).json({
+      error: 'Session ID required. Initialize a session first with POST.'
+    });
+  };
 
-    if (!transport) {
-      res.status(404).json({
-        error: 'Session not found. Please reconnect.'
-      });
+  // MCP endpoints - single path handles GET, POST, DELETE
+  app.all('/mcp', mcpHandler);
+  app.all('/', (req, res, next) => {
+    // Only handle MCP requests on root, not other paths
+    if (req.method === 'GET' && !req.headers.accept?.includes('text/event-stream') && !req.headers['mcp-session-id']) {
+      // Redirect to docs for browser access
+      res.redirect('/docs');
       return;
     }
-
-    try {
-      const message = req.body as JSONRPCMessage;
-      await transport.handleMessage(message);
-      res.status(202).json({ status: 'accepted' });
-    } catch (error) {
-      console.error('Error handling MCP message:', error);
-      res.status(500).json({
-        error: 'Failed to process message'
-      });
-    }
+    mcpHandler(req, res);
   });
 
   // Documentation page
@@ -277,18 +421,13 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
         </div>
 
         <div class="endpoint">
-          <span class="method">GET</span> <code>/mcp</code>
-          <p>MCP SSE connection (requires Bearer token)</p>
-        </div>
-
-        <div class="endpoint">
-          <span class="method">POST</span> <code>/mcp</code>
-          <p>Send MCP messages (requires Bearer token)</p>
+          <span class="method">GET/POST</span> <code>/mcp</code>
+          <p>MCP Streamable HTTP endpoint</p>
         </div>
 
         <h2>Usage</h2>
         <p>Add this server URL to your Claude MCP configuration:</p>
-        <pre>${config.http!.baseUrl}</pre>
+        <pre>${config.http!.baseUrl}/mcp</pre>
         <p>Claude will guide you through the OAuth authorization process.</p>
 
         <h2>Available Tools</h2>
@@ -314,10 +453,11 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
   });
 
   // Start server
-  const server = app.listen(config.http.port, config.http.host, () => {
+  const httpServer = app.listen(config.http.port, config.http.host, () => {
     console.log(`[${config.server.name}] HTTP MCP server started`);
     console.log(`  Mode: http`);
     console.log(`  URL: ${config.http!.baseUrl}`);
+    console.log(`  MCP: ${config.http!.baseUrl}/mcp`);
     console.log(`  Health: ${config.http!.baseUrl}/health`);
     console.log(`  Docs: ${config.http!.baseUrl}/docs`);
     console.log(`  Rate limit: ${config.http!.rateLimitPerMinute} req/min`);
@@ -326,9 +466,17 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
   // Graceful shutdown
   const shutdown = async () => {
     console.log('\nShutting down...');
-    await sessionManager.closeAll();
+    // Close all transports
+    for (const [sessionId, transport] of transports) {
+      try {
+        await transport.close();
+      } catch {
+        // Ignore errors during shutdown
+      }
+      transports.delete(sessionId);
+    }
     closeDatabase();
-    server.close(() => {
+    httpServer.close(() => {
       console.log('Server closed');
       process.exit(0);
     });

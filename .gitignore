@@ -28,3 +28,8 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Deployment artifacts
+deploy-output/
+*.tar.gz
+package-lock.json

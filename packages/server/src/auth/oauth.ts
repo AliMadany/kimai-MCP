@@ -1,9 +1,10 @@
 import { Router, Request, Response } from 'express';
 import { readFileSync } from 'fs';
+import { randomUUID } from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { KimaiClient } from '@urtime/shared';
-import { getDatabase } from './database.js';
+import { getDatabase } from './database-json.js';
 import { encrypt, decrypt, generateSecureToken, verifyPKCE } from './crypto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -311,6 +312,35 @@ export function createOAuthRouter(baseUrl: string): Router {
         error_description: 'Failed to process token request'
       });
     }
+  });
+
+  /**
+   * POST /register - Dynamic Client Registration (RFC 7591)
+   * Allows clients to register themselves dynamically
+   */
+  router.post('/register', (req: Request, res: Response) => {
+    const { redirect_uris, client_name, grant_types, response_types, token_endpoint_auth_method } = req.body;
+
+    // Validate required fields
+    if (!redirect_uris || !Array.isArray(redirect_uris) || redirect_uris.length === 0) {
+      return res.status(400).json({
+        error: 'invalid_client_metadata',
+        error_description: 'redirect_uris is required and must be a non-empty array'
+      });
+    }
+
+    // Generate a client_id (we accept any client since auth is done via Kimai credentials)
+    const clientId = `mcp_client_${randomUUID()}`;
+
+    // Return client registration response
+    res.status(201).json({
+      client_id: clientId,
+      client_name: client_name || 'MCP Client',
+      redirect_uris: redirect_uris,
+      grant_types: grant_types || ['authorization_code', 'refresh_token'],
+      response_types: response_types || ['code'],
+      token_endpoint_auth_method: token_endpoint_auth_method || 'none'
+    });
   });
 
   /**
