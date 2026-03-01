@@ -6,16 +6,16 @@ Log time, query hours, and manage your timesheet using natural language.
 
 ## Usage
 
-### Option 1: Remote Server (Recommended)
+### Option 1: Deploy Your Own Server (Recommended)
 
-Connect to the hosted MCP server — no setup required.
+Host the MCP server on your own infrastructure and connect to it remotely.
 
-Add this URL in your AI client:
+See [Deploying your own instance](docs/deploying.md) for full instructions.
+
+Once deployed, add your server URL to your AI client:
 ```
-https://kimaimcp.urkitchenegypt.com/mcp
+https://your-domain.com/mcp
 ```
-
-On first connect, you'll be asked to enter your Kimai URL and API token.
 
 ### Option 2: Run Locally
 
