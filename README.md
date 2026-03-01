@@ -1,45 +1,51 @@
-# urTime MCP Server
+# Kimai-MCP
 
-Remote MCP (Model Context Protocol) server for Kimai time tracking integration.
+Connect Claude, ChatGPT, and other AI assistants to your [Kimai](https://www.kimai.org) time tracker using MCP (Model Context Protocol).
 
-Allows Claude, ChatGPT, and other AI assistants to manage your Kimai timesheets.
+Log time, query hours, and manage your timesheet using natural language.
 
-## Features
+## Usage
 
-- OAuth 2.1 authentication (MCP spec compliant)
-- Works with any Kimai instance
-- Secure credential storage (AES-256-GCM encryption)
-- Rate limiting and security headers
+### Option 1: Remote Server (Recommended)
 
-## Quick Start
+Connect to the hosted MCP server — no setup required.
+
+Add this URL in your AI client:
+```
+https://kimaimcp.urkitchenegypt.com/mcp
+```
+
+On first connect, you'll be asked to enter your Kimai URL and API token.
+
+### Option 2: Run Locally
+
+Clone and run the server on your machine.
 
 ```bash
-# Install dependencies
-pnpm install
+git clone https://github.com/AliMadany/kimai-MCP.git
+cd kimai-MCP
+pnpm install && pnpm build
 
-# Build
-pnpm build
-
-# Configure
-cd packages/server
-cp .env.example .env
-# Edit .env with your settings
-
-# Run
-pnpm start
+MCP_HTTP_MODE=true \
+HTTP_BASE_URL=http://localhost:3002 \
+ENCRYPTION_KEY=$(openssl rand -hex 32) \
+node packages/server/dist/server.js
 ```
 
-## Deployment
+Then add `http://localhost:3002/mcp` to your AI client.
 
-See [packages/server/DEPLOY.md](packages/server/DEPLOY.md) for production deployment instructions.
+## Tools
 
-## Structure
+| Tool | Description |
+|------|-------------|
+| `kimai_log` | Log time using natural language ("2h on ProjectX yesterday") |
+| `kimai_query` | Query projects, activities, entries, or work hours |
+| `kimai_manage` | Update or delete existing time entries |
 
-```
-packages/
-  server/     # MCP server with OAuth
-  shared/     # Kimai client library
-```
+## Docs
+
+- [Deploying your own instance](docs/deploying.md)
+- [Troubleshooting](docs/troubleshooting.md)
 
 ## License
 
