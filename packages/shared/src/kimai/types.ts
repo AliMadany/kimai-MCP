@@ -79,6 +79,33 @@ export const ConnectionTestResultSchema = z.object({
 });
 export type ConnectionTestResult = z.infer<typeof ConnectionTestResultSchema>;
 
+// Customer
+export interface Customer {
+  id: number;
+  name: string;
+  visible?: boolean;
+  comment?: string | null;
+}
+
+// User
+export interface User {
+  id: number;
+  username: string;
+  email: string;
+  alias?: string | null;
+  enabled?: boolean;
+  roles?: string[];
+  language?: string;
+}
+
+// Team
+export interface Team {
+  id: number;
+  name: string;
+  teamlead: number | { id: number; username: string };
+  members?: Array<{ id: number; username: string }>;
+}
+
 // Work hours summary
 export const WorkHoursSummarySchema = z.object({
   date: z.string(),

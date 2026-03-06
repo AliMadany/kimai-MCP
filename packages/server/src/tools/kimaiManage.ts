@@ -1,7 +1,7 @@
 import type { ToolContext } from './index.js';
 
 interface ManageArgs {
-  action: 'update' | 'delete';
+  action: 'update' | 'delete' | 'duplicate';
   entry_id: number;
   kimai_token?: string;
   kimai_email?: string;
@@ -11,6 +11,7 @@ interface ManageArgs {
     activity?: number;
     begin?: string;
     end?: string;
+    tags?: string[];
   };
 }
 
@@ -107,12 +108,43 @@ export async function handleKimaiManage(
       }
     }
 
+    case 'duplicate': {
+      try {
+        const duplicated = await client.duplicateTimesheet(entry_id);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              action: 'duplicate',
+              entry_id,
+              duplicated: {
+                id: duplicated.id,
+                begin: duplicated.begin,
+                end: duplicated.end,
+                duration: duplicated.duration
+              },
+              message: `Entry ${entry_id} duplicated as entry ${duplicated.id}`
+            }, null, 2)
+          }]
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ success: false, action: 'duplicate', entry_id, error: message, isError: true })
+          }]
+        };
+      }
+    }
+
     default:
       return {
         content: [{
           type: 'text',
           text: JSON.stringify({
-            error: `Unknown action: ${action}. Use: update or delete`,
+            error: `Unknown action: ${action}. Use: update, delete, or duplicate`,
             isError: true
           })
         }]

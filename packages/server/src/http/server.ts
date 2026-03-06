@@ -112,12 +112,15 @@ export async function createHttpServer(config: ServerConfig): Promise<void> {
 
   // Health check
   app.get('/health', (_req: Request, res: Response) => {
+    const now = Date.now();
     res.json({
       status: 'ok',
       server: config.server.name,
       version: config.server.version,
       mode: 'http',
-      sessions: transports.size
+      sessions: transports.size,
+      server_time: new Date(now).toISOString(),
+      server_time_ms: now
     });
   });
 

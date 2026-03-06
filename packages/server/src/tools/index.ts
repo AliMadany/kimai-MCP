@@ -5,6 +5,8 @@ import type { KimaiClient, AITimeEntryParser } from '@urtime/shared';
 import { handleKimaiQuery } from './kimaiQuery.js';
 import { handleKimaiLog } from './kimaiLog.js';
 import { handleKimaiManage } from './kimaiManage.js';
+import { handleKimaiTimer } from './kimaiTimer.js';
+import { handleKimaiAdmin } from './kimaiAdmin.js';
 
 export interface ToolContext {
   config: ServerConfig;
@@ -25,7 +27,7 @@ export function registerTools(): Tool[] {
         properties: {
           type: {
             type: 'string',
-            enum: ['projects', 'activities', 'entries', 'hours'],
+            enum: ['projects', 'activities', 'entries', 'hours', 'customers', 'active', 'me'],
             description: 'What to query: projects, activities, entries (recent timesheets), or hours (work hours summary)'
           },
           kimai_token: {
@@ -102,8 +104,8 @@ export function registerTools(): Tool[] {
         properties: {
           action: {
             type: 'string',
-            enum: ['update', 'delete'],
-            description: 'Action to perform: update or delete'
+            enum: ['update', 'delete', 'duplicate'],
+            description: 'Action to perform: update, delete, or duplicate'
           },
           entry_id: {
             type: 'number',
@@ -131,6 +133,69 @@ export function registerTools(): Tool[] {
         },
         required: ['action', 'entry_id']
       }
+    },
+    {
+      name: 'kimai_timer',
+      description: 'Start, stop, or check active time tracking timers in Kimai. Use action=start to begin live tracking, action=stop to end a running timer, action=status to see what is currently running.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['start', 'stop', 'status'],
+            description: 'Action: start a new timer, stop an active timer, or check status'
+          },
+          project_id: { type: 'number', description: 'Project ID (required for start)' },
+          activity_id: { type: 'number', description: 'Activity ID (required for start)' },
+          entry_id: { type: 'number', description: 'Timer entry ID to stop (optional for stop — stops most recent if omitted)' },
+          description: { type: 'string', description: 'Description for the timer entry' },
+          tags: { type: 'array', items: { type: 'string' }, description: 'Tags to apply' },
+          begin: { type: 'string', description: 'ISO datetime to start from (defaults to now)' },
+          kimai_token: { type: 'string', description: 'Kimai API token (optional if KIMAI_TOKEN env var is set)' },
+          kimai_email: { type: 'string', description: 'Kimai user email (optional if KIMAI_EMAIL env var is set)' }
+        },
+        required: ['action']
+      }
+    },
+    {
+      name: 'kimai_admin',
+      description: 'Admin tool for managing Kimai resources: create/update/delete projects, activities, customers; manage users and teams. Requires admin-level API token.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          entity: {
+            type: 'string',
+            enum: ['project', 'activity', 'customer', 'user', 'team'],
+            description: 'The type of resource to manage'
+          },
+          action: {
+            type: 'string',
+            enum: ['list', 'create', 'update', 'delete', 'add_member', 'remove_member'],
+            description: 'Action to perform'
+          },
+          project_id: { type: 'number' },
+          activity_id: { type: 'number' },
+          customer_id: { type: 'number' },
+          user_id: { type: 'number' },
+          team_id: { type: 'number' },
+          teamlead_id: { type: 'number', description: 'User ID of the team lead' },
+          member_user_id: { type: 'number', description: 'User ID to add/remove from team' },
+          name: { type: 'string' },
+          comment: { type: 'string' },
+          visible: { type: 'boolean' },
+          global_activities: { type: 'boolean', description: 'Allow global activities on project' },
+          username: { type: 'string', description: 'Username for new user' },
+          email: { type: 'string', description: 'Email for new user' },
+          plainPassword: { type: 'string', description: 'Password for new user' },
+          alias: { type: 'string', description: 'Display alias for user' },
+          enabled: { type: 'boolean', description: 'Whether user account is enabled' },
+          roles: { type: 'array', items: { type: 'string' }, description: 'User roles (e.g. ROLE_ADMIN)' },
+          search: { type: 'string', description: 'Search/filter term' },
+          kimai_token: { type: 'string', description: 'Kimai API token (optional if KIMAI_TOKEN env var is set)' },
+          kimai_email: { type: 'string', description: 'Kimai user email (optional if KIMAI_EMAIL env var is set)' }
+        },
+        required: ['entity', 'action']
+      }
     }
   ];
 }
@@ -151,6 +216,10 @@ export async function handleToolCall(
         return await handleKimaiLog(args, context);
       case 'kimai_manage':
         return await handleKimaiManage(args, context);
+      case 'kimai_timer':
+        return await handleKimaiTimer(args, context);
+      case 'kimai_admin':
+        return await handleKimaiAdmin(args, context);
       default:
         return {
           content: [{

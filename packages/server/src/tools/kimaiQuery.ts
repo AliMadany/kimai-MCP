@@ -2,10 +2,12 @@ import type { ToolContext } from './index.js';
 import { formatDuration } from '@urtime/shared';
 
 interface QueryArgs {
-  type: 'projects' | 'activities' | 'entries' | 'hours';
+  type: 'projects' | 'activities' | 'entries' | 'hours' | 'customers' | 'active' | 'me';
   kimai_token?: string;
   kimai_email?: string;
   project_id?: number;
+  customer_id?: number;
+  user_id?: number;
   search?: string;
   start_date?: string;
   end_date?: string;
@@ -24,6 +26,8 @@ export async function handleKimaiQuery(
     kimai_token,
     kimai_email,
     project_id,
+    customer_id,
+    user_id,
     search,
     start_date,
     end_date,
@@ -82,6 +86,8 @@ export async function handleKimaiQuery(
       if (start_date) params.begin = `${start_date}T00:00:00`;
       if (end_date) params.end = `${end_date}T23:59:59`;
       if (project_id) params.project = project_id;
+      if (customer_id) params.customer = customer_id;
+      if (user_id) params.user = user_id;
       const entries = await client.getTimesheets(params);
 
       const formatted = entries.map(e => ({
@@ -181,12 +187,79 @@ export async function handleKimaiQuery(
       };
     }
 
+    case 'customers': {
+      const customers = await client.getCustomers(search);
+      const formatted = customers.map(c => ({
+        id: c.id,
+        name: c.name,
+        visible: c.visible
+      }));
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            type: 'customers',
+            count: formatted.length,
+            customers: formatted
+          }, null, 2)
+        }]
+      };
+    }
+
+    case 'active': {
+      const active = await client.getActiveTimesheets();
+      const now = Date.now();
+      const formatted = active.map(e => {
+        const beginMs = new Date(e.begin).getTime();
+        const runningSeconds = Math.floor((now - beginMs) / 1000);
+        return {
+          id: e.id,
+          project: typeof e.project === 'object' ? e.project.name : e.project,
+          activity: typeof e.activity === 'object' ? e.activity.name : e.activity,
+          begin: e.begin,
+          runningFor: formatDuration(runningSeconds),
+          description: e.description || null
+        };
+      });
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            type: 'active',
+            running: formatted.length > 0,
+            count: formatted.length,
+            active: formatted
+          }, null, 2)
+        }]
+      };
+    }
+
+    case 'me': {
+      const me = await client.getMe();
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            type: 'me',
+            user: {
+              id: me.id,
+              username: me.username,
+              email: me.email,
+              alias: me.alias || null,
+              roles: me.roles || [],
+              language: me.language || null
+            }
+          }, null, 2)
+        }]
+      };
+    }
+
     default:
       return {
         content: [{
           type: 'text',
           text: JSON.stringify({
-            error: `Unknown query type: ${type}. Use: projects, activities, entries, or hours`,
+            error: `Unknown query type: ${type}. Use: projects, activities, entries, hours, customers, active, or me`,
             isError: true
           })
         }]

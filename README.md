@@ -1,3 +1,4 @@
+
 # Kimai-MCP
 
 Connect Claude, ChatGPT, and other AI assistants to your [Kimai](https://www.kimai.org) time tracker using MCP (Model Context Protocol).
